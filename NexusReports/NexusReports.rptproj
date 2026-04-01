@@ -51,6 +51,7 @@
   <ItemGroup>
     <Report Include="Active Queries_C.rdl" />
     <Report Include="Active Traces and XEvents_C.rdl" />
+    <Report Include="ActiveProcesses_C.rdl" />
     <Report Include="AlwaysOn_AGBasics_C.rdl" />
     <Report Include="AlwaysOn_AGDetails_C.rdl" />
     <Report Include="AnalysisSummary_C.rdl" />
@@ -81,13 +82,24 @@
     <Report Include="Query Hash_C.rdl" />
     <Report Include="Query_Store_C.rdl" />
     <Report Include="Query_Store_Details_C.rdl" />
+    <Report Include="ReadTrace_Grouping_C.rdl" />
+    <Report Include="ReadTrace_InterestingEvents_C.rdl" />
+    <Report Include="ReadTrace_Lineage_C.rdl" />
+    <Report Include="ReadTrace_Main_C.rdl" />
+    <Report Include="ReadTrace_UniqueBatchDetails_C.rdl" />
+    <Report Include="ReadTrace_UniqueBatchTopN_C.rdl" />
+    <Report Include="ReadTrace_UniqueStmtDetails_C.rdl" />
+    <Report Include="ReadTrace_UniqueStmtTopN_C.rdl" />
+    <Report Include="ReadTrace_Warnings_C.rdl" />
     <Report Include="Replication_Topology_C.rdl" />
+    <Report Include="Running_Device_Drivers_C.rdl" />
     <Report Include="ServerConfiguration_C.rdl" />
     <Report Include="Spinlock Details_C.rdl" />
     <Report Include="Spinlock Stats_C.rdl" />
     <Report Include="SQL 2000 Blocking Detail_C.rdl" />
     <Report Include="SQL 2000 Blocking_C.rdl" />
     <Report Include="SQL Perf Main.rdl" />
+    <Report Include="SQLAssessmentAPI_C.rdl" />
     <Report Include="SysIndexes_C.rdl" />
     <Report Include="Sysprocesses_C.rdl" />
     <Report Include="System_Requests_C.rdl" />

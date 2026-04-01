@@ -159,7 +159,8 @@ namespace sqlnexus
                         
                         String DisplayMember = (labelFieldNode==null ? vfnode.InnerText.ToString() : labelFieldNode.InnerText.ToString());
                         String ValueMember = vfnode.InnerText.ToString();
-                        
+                        dt.DefaultView.Sort = dt.Columns[ValueMember].ColumnName;
+
                         ((ComboBox)ctl).DataSource = dt;
                         ((ComboBox)ctl).DisplayMember = dt.Columns[DisplayMember].ColumnName;
                         ((ComboBox)ctl).ValueMember = dt.Columns[ValueMember].ColumnName;
@@ -539,7 +540,6 @@ namespace sqlnexus
                 XmlNode vfnode = node.SelectSingleNode("rds:DefaultValue/rds:DataSetReference/rds:ValueField", nsmgr);
                 System.Diagnostics.Debug.Assert(null != vfnode);
 
-                DataTable dt = new DataTable();
                 using (SqlConnection conn = new SqlConnection(Globals.credentialMgr.ConnectionString))
                 {
                     

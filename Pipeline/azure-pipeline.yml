@@ -1,0 +1,83 @@
+name: BuildAndSecurePipeline
+trigger: none
+
+parameters:
+- name: poolName
+  type: string
+  default: MSSecurity-1ES-Build-Agents-Pool
+
+- name: image
+  type: string
+  default: MSSecurity-1ES-Windows-2022
+
+- name: os
+  type: string
+  default: windows
+
+variables:
+  solution: '**/*.sln'
+  buildPlatform: 'x64'
+  buildConfiguration: 'Release'
+  Codeql.Enabled: true
+
+resources:
+  repositories:
+  - repository: 1ESPipelineTemplates
+    type: git
+    name: 1ESPipelineTemplates/1ESPipelineTemplates
+    ref: refs/tags/release
+
+extends:
+  template: v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates
+  parameters:
+    pool:
+      name: ${{ parameters.poolName }}
+      image: ${{ parameters.image }}
+      os: ${{ parameters.os }}
+
+    stages:
+    - stage: BuildAndScan
+      displayName: Build and Scan Stage
+      jobs:
+      - job: BuildJob
+        displayName: Build Job
+        templateContext:
+          outputs:
+          - output: pipelineArtifact
+            targetPath: $(Build.ArtifactStagingDirectory)
+            artifactName: SQLNExusPipelineArtifacts
+        steps:
+        - checkout: self
+
+        # NuGet restore
+        - task: NuGetToolInstaller@1
+        - task: NuGetCommand@2
+          inputs:
+            command: restore
+            restoreSolution: '$(Build.SourcesDirectory)/sqlnexus.sln'
+            feedsToUse: select
+
+        # Build the solution
+        - task: VSBuild@1
+          inputs:
+            solution: '$(solution)'
+            platform: '$(buildPlatform)'
+            configuration: '$(buildConfiguration)'
+            msbuildArgs: '/p:TargetFrameworkVersion=v4.8'
+
+        # Drop binaries for scanning
+        - task: ManifestGeneratorTask@0
+          inputs:
+            BuildDropPath: '$(Build.ArtifactStagingDirectory)'
+
+      - job: ReleaseJob
+        dependsOn: BuildJob
+        templateContext:
+          type: releaseJob
+          isProduction: true
+          inputs:
+          - input: pipelineArtifact
+            artifactName: SQLNExusPipelineArtifacts
+        steps:
+        - script: tree.com $(Pipeline.Workspace) /f
+          displayName: List files

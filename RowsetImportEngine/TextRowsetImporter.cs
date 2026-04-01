@@ -241,13 +241,15 @@ namespace RowsetImportEngine
         /// col width for non-tabular columns without explicitly specified width
         /// </summary>
 		public const int DEFAULT_NONTAB_COLUMN_LEN = 256;
+        /// <summary>
+        /// SQL Server uses -1 to represent MAX for variable-length types 
+        /// </summary>
+        private const int SQL_MAX_LENGTH = -1;
 
-        
-		
         /// <summary>
         /// Used to read the input file
         /// </summary>
-		private StreamReader sr;
+        private StreamReader sr;
         /// <summary>
         /// Connection to SQL
         /// </summary>
@@ -349,70 +351,74 @@ namespace RowsetImportEngine
 		}
 
 
-		/// <summary>
+        /// <summary>
         /// Based on column metadata in the current rowset, format and execute CREATE TABLE command. 
-		/// </summary>
-		private void CreateTable ()
-		{
-			string SqlStmt = string.Empty;
-			SqlCommand cmd;
-			int len;
+        /// </summary>
+        private void CreateTable()
+        {
+            string SqlStmt = string.Empty;
+            SqlCommand cmd;
+            int len;
             SqlConnection conn = new SqlConnection(this.connStr);
+
+            // Validate table name
+            if (!IsSafeSqlIdentifier(CurrentRowset.Name))
+            {
+                logger.LogMessage($"CreateTable: Unsafe table name '{CurrentRowset.Name}'", MessageOptions.Silent);
+                throw new ArgumentException("Unsafe table name.");
+            }
+
             try
             {
                 // Create the CREATE TABLE command. 
                 cmd = new SqlCommand();
-                SqlStmt = "IF OBJECT_ID ('" + CurrentRowset.Name + "') IS NULL CREATE TABLE [" + CurrentRowset.Name + "] (";
+                var sb = new StringBuilder();
+
+
+                // Use QUOTENAME for table name to ensure it's properly escaped and validated
+                sb.Append($"IF OBJECT_ID(N'{QUOTENAME(CurrentRowset.Name)}', 'U') IS NULL CREATE TABLE {QUOTENAME(CurrentRowset.Name)} (");
+
+
                 foreach (RowsetImportEngine.Column c in CurrentRowset.Columns)
                 {
                     len = c.SqlColumnLength;
                     string ColumnName = c.Name.Trim();
-                    SqlStmt += "[" + ColumnName + "] " + c.DataType.ToString();
 
-                    // Add column length to those datatypes that need it
-                    switch (c.DataType)
+                    // Validate column name
+                    if (!IsSafeSqlIdentifier(ColumnName))
                     {
-                        case SqlDbType.Decimal:
-                            SqlStmt += "(38, 10)";	// we can't know the necessary prec/scale in advance -- use (38,10) as a compromise
-                            break;
-                        case SqlDbType.Float:
-                            SqlStmt += "(53)";		// always use max float
-                            break;
-                        case SqlDbType.VarChar:
-                        case SqlDbType.VarBinary:
-                            if (len > 0 && len <= 8000)
-                                SqlStmt += "(" + len + ")";
-                            else if (len == Column.SQL_MAX_LENGTH || len > 8000)
-                                SqlStmt += "(max)";
-                            else
-                                SqlStmt += "(" + DEFAULT_NONTAB_COLUMN_LEN + ")";
-                            break;
-                        case SqlDbType.NVarChar:
-                            if (len > 0 && len <= 4000)
-                                SqlStmt += "(" + len + ")";
-                            else if (len == Column.SQL_MAX_LENGTH || len > 4000)
-                                SqlStmt += "(max)";
-                            else
-                                SqlStmt += "(" + DEFAULT_NONTAB_COLUMN_LEN + ")";
-                            break;
+                        logger.LogMessage($"CreateTable: Unsafe column name '{ColumnName}'", MessageOptions.Silent);
+                        throw new ArgumentException("Unsafe column name.");
                     }
-                    SqlStmt += " NULL, ";	// Make all columns NULLable
+
+                    // Append column definition safely by validation type and adding appropriate length/precision. Make all columns NULLable.
+                    sb.Append($"{QUOTENAME(ColumnName)} {GetSafeSqlType(c.DataType, c.SqlColumnLength)} NULL, ");
+
                 }
-                // Remove the last comma.
-                SqlStmt = SqlStmt.TrimEnd(',', ' ') + ") \n";
-                /*
-                // No clustered index -- slows things down.
-                SqlStmt += "CREATE INDEX cidx ON [" + CurrentRowset.Name + "] "
-                    + "([" + (CurrentRowset.Columns[0] as Column).Name + "])";
-                */
+
+
+                // Remove trailing comma and close parenthesis
+                SqlStmt = sb.ToString().TrimEnd(',', ' ') + ")";
+                
                 // Use the SqlCommand to run the CREATE TABLE. 
-
-
                 conn.Open();
                 cmd.Connection = conn;
-                cmd.CommandText = SqlStmt;
+                cmd.CommandText = SqlStmt;  // CodeQL [SM03934] multiple levels of object and column name validation performed above
                 cmd.ExecuteNonQuery();
                 conn.Close();
+
+            }
+            catch (SqlException e)
+            {
+                ErrorDialog ed = new ErrorDialog(e, false, this.logger);
+                Util.Logger.LogMessage("Createtable command " + SqlStmt);
+                ed.Handle();
+            }
+            catch (InvalidOperationException e)
+            {
+                ErrorDialog ed = new ErrorDialog(e, false, this.logger);
+                Util.Logger.LogMessage("Createtable command " + SqlStmt);
+                ed.Handle();
             }
             catch (Exception e)
             {
@@ -424,14 +430,13 @@ namespace RowsetImportEngine
             {
                 conn.Close();
             }
-			return;
-		}
-		
-		/// <summary>
+            return;
+        }
+        /// <summary>
         /// Run a DROP TABLE for the current rowset's SQL table.  Optionally executed the first time we 
         /// encounter a new rowset.
-		/// </summary>
-		private void DropCurrentTable ()
+        /// </summary>
+        private void DropCurrentTable ()
 		{
 			DropTable (CurrentRowset.Name);
 			return;
@@ -451,11 +456,12 @@ namespace RowsetImportEngine
 
 		private void DropTable (string TableName)
 		{
-			SqlDataAdapter da = new SqlDataAdapter();
-			DataSet ds = new DataSet();
 
-			// First drop any dependent objects
-			const string DependentObjectCheckSql = 
+            // Validate table name
+            string safeTableName = QUOTENAME(TableName);
+
+            // First drop any dependent objects
+            const string DependentObjectCheckSql = 
 				"SELECT DISTINCT OBJECT_NAME (syso.[id]) AS dependent_object,  \n"
 				+ "  CASE  \n"
 				+ "    WHEN SUBSTRING (val.name, 5, 16) = 'user table' THEN 'table' \n"
@@ -470,58 +476,133 @@ namespace RowsetImportEngine
 				+ "WHERE [depid] = OBJECT_ID ('{0}') \n"
 				+ "  AND OBJECT_NAME (dep.[id]) != '{0}' \n";
 
-            SqlConnection conn = new SqlConnection(this.connStr);
-            conn.Open();
-            SqlCommand cmd =  new SqlCommand(String.Format(DependentObjectCheckSql, TableName), conn);
+            // Format the SQL query to find dependent objects
+            string sqlQuery = String.Format(DependentObjectCheckSql, safeTableName);
 
-            SqlDataReader dr = cmd.ExecuteReader();
-
-            while (dr.Read())
+            using (SqlConnection conn = new SqlConnection(this.connStr))
             {
-                DropObject(dr["dependent_object"].ToString(), dr["obj_type"].ToString());
+                conn.Open();
+                using (SqlCommand cmd = new SqlCommand(sqlQuery, conn))
+                using (SqlDataReader dr = cmd.ExecuteReader())
+                {
+                    while (dr.Read())
+                    {
+                        DropObject(dr["dependent_object"].ToString(), dr["obj_type"].ToString());
+                    }
+                }
             }
-            conn.Close();
-			
-			// Then drop the table itself
-			DropObject (TableName, "table");
+
+
+            // Then drop the table itself
+            DropObject(TableName, "table");
 			return;
 		}
 
-		private void DropObject (string ObjectName, string ObjectType)
+        // CodeQL [sql-injection]: Identifiers validated and escaped via QUOTENAME
+
+        private static string QUOTENAME(string identifier)
         {
-            SqlConnection conn = new SqlConnection(this.connStr);
-            try
+            // Wrap in brackets and escape any closing bracket inside the identifier by doubling it to prevent malicious input
+            return "[" + identifier.Replace("]", "]]") + "]";
+        }
+
+        private static readonly HashSet<string> AllowedObjectTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "TABLE", "PROCEDURE", "FUNCTION", "VIEW"
+        };
+
+        private bool IsSafeSqlIdentifier(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name) || name.Length > 128)
+                return false;
+            // Must start with a letter or underscore, followed by letters, numbers, spaces, underscores, hyphens, #, or $   
+            //^ [A-Za-z_][A-Za-z0-9 _\-#\$]*$
+            return Regex.IsMatch(name, @"^[A-Za-z_][A-Za-z0-9 _\-#\$]*$");
+
+        }
+
+
+        private string GetSafeSqlType(SqlDbType dataType, int length)
+        {
+            switch (dataType)
             {
-                // Create the DROP TABLE command. 
-                SqlCommand cmd = new SqlCommand();
-                string SqlStmt = String.Format("IF OBJECT_ID ('{1}') IS NOT NULL DROP {0} [{1}]", ObjectType, ObjectName);
-                // Use the SqlCommand to run the CREATE TABLE. 
-
-
-                cmd.Connection = conn;
-                conn.Open();
-                cmd.CommandText = SqlStmt;
-                cmd.ExecuteNonQuery();
-
+                case SqlDbType.Decimal:
+                    return "DECIMAL(38,10)";
+                case SqlDbType.Float:
+                    return "FLOAT(53)";
+                case SqlDbType.VarChar:
+                    return $"VARCHAR({GetLength(length, 8000)})";
+                case SqlDbType.VarBinary:
+                    return $"VARBINARY({GetLength(length, 8000)})";
+                case SqlDbType.NVarChar:
+                    return $"NVARCHAR({GetLength(length, 4000)})";
+                default:
+                    // Only allow known safe types
+                    return dataType.ToString().ToUpperInvariant();
             }
-            catch (Exception e)
+        }
+
+        private string GetLength(int len, int maxAllowed)
+        {
+            if (len == SQL_MAX_LENGTH)
+                return "MAX";
+            else if (len > 0 && len <= maxAllowed)
+                return len.ToString();
+            else
+                return DEFAULT_NONTAB_COLUMN_LEN.ToString();
+        }
+
+        private void DropObject(string ObjectName, string ObjectType)
+        {
+            // CodeQL [sql-injection]: Identifiers validated before use in SQL statement
+            if (!AllowedObjectTypes.Contains(ObjectType))
             {
-                ErrorDialog ed = new ErrorDialog(e, true, this.logger);
-
-                ed.Handle();
+                logger.LogMessage($"DropObject: Invalid object type '{ObjectType}'", MessageOptions.Silent);
+                throw new ArgumentException("Invalid object type.");
             }
-            finally
+            if (!IsSafeSqlIdentifier(ObjectName))
             {
-                conn.Close();
+                logger.LogMessage($"DropObject: Unsafe object name '{ObjectName}'", MessageOptions.Silent);
+                throw new ArgumentException("Unsafe object name.");
             }
-		}
+
+            using (SqlConnection conn = new SqlConnection(this.connStr))
+            {
+                try
+                {
+                    // Bracket-quote the object name
+                    string SqlStmt = $"IF OBJECT_ID(N'{ObjectName}', N'{ObjectType}') IS NOT NULL DROP {ObjectType} [{ObjectName}]";
+                    using (SqlCommand cmd = new SqlCommand(SqlStmt, conn))
+                    {
+                        conn.Open();
+                        cmd.ExecuteNonQuery();  // CodeQL [SM03934] multiple levels of object validation performed prior to this call
+                    }
+                }
+                catch (SqlException e)
+                {
+                    ErrorDialog ed = new ErrorDialog(e, true, this.logger);
+                    ed.Handle();
+                }
+                catch (InvalidOperationException e)
+                {
+                    ErrorDialog ed = new ErrorDialog(e, true, this.logger);
+                    ed.Handle();
+                }
+
+                catch (Exception e)
+                {
+                    ErrorDialog ed = new ErrorDialog(e, true, this.logger);
+                    ed.Handle();
+                }
+            }
+        }
 
 
-		/// <summary>
+        /// <summary>
         /// Read through each line of the input file, recognize any rowsets in the file, parse and insert the 
         /// rows from these rowsets. 
-		/// </summary>
-		private void ProcessFile () 
+        /// </summary>
+        private void ProcessFile()
 		{
 			bool	InRowset = false;
 			string	line = "";			// current line
@@ -830,45 +911,61 @@ namespace RowsetImportEngine
 			return true;
 		}
 
-		private void InsertRow ()
-		{
-			//bool	ret = false;
-			int		ColNum = 0;
-			object	ColData;
-            DataRow row = CurrentRowset.Bulkload.GetNewRow();
-          
+        private void InsertRow()
+        {
+            //bool	ret = false;
+            int     ColNum = 0;
+            object  ColData;
+
+            try
+            {
+                DataRow row = CurrentRowset.Bulkload.GetNewRow();
+
                 foreach (RowsetImportEngine.Column c in CurrentRowset.Columns)
                 {
-                    // Handle special autonumber column
-                    if (("id" == c.Name) && (c.RowsetLevel))
+                    // Auto-number logic
+                    if (c.Name.Equals("id", StringComparison.OrdinalIgnoreCase) && c.RowsetLevel)
                         ColData = this.CurrentRowset.RowsInserted + 1;
                     else
                         ColData = c.Data;
 
-                    //handling null
-                    if (ColData == null || ColData.ToString().ToUpper().Trim() == "NULL")
+                    // Normalize data
+                    if (ColData == null || ColData.ToString().Trim().Equals("NULL", StringComparison.OrdinalIgnoreCase))
                     {
                         row[c.Name] = DBNull.Value;
                     }
+                    else if (c.DataType == SqlDbType.VarChar || c.DataType == SqlDbType.NVarChar)
+                    {
+                        row[c.Name] = ColData.ToString().Trim(); // Trim strings
+                    }
                     else
                     {
-                        row[c.Name] = ColData;
+                        row[c.Name] = ColData; // Keep original for numeric/date types
                     }
 
 
                     // TODO: If we fail to set row data, log row as failed along with BulkLoad.GetErrorMessage().
                     ColNum++;
                 }
-            
-            CurrentRowset.Bulkload.InsertRow(row);
-			this.CurrentRowset.RowsInserted++;
-			TotalRowsInserted++;
-			return;
-		}
 
-		// Periodically flush the BCP batch for all active rowsets so that we don't 
-		// suffer from excessive tran log autogrow. 
-		private void FlushRowsets  ()
+                CurrentRowset.Bulkload.InsertRow(row);
+                this.CurrentRowset.RowsInserted++;
+                TotalRowsInserted++;
+                return;
+            }
+
+            catch (Exception ex)
+            {
+                logger.LogMessage($"Inserting a row failed. Error: {ex.Message}\r\n {ex.StackTrace}");
+                throw; // rethrow preserves original exception
+
+            }
+
+        }
+
+        // Periodically flush the BCP batch for all active rowsets so that we don't 
+        // suffer from excessive tran log autogrow. 
+        private void FlushRowsets  ()
 		{
 			//long ret;
 			foreach (TextRowset r in this.KnownRowsets)
@@ -882,7 +979,7 @@ namespace RowsetImportEngine
                     }
                     catch (SqlTypeException ex)
                     {
-                        logger.LogMessage("flushing rowset failed for " + r.Name + ex.ToString());
+                        logger.LogMessage("Flushing rowset failed for " + r.Name + ex);
 
                     }
                     

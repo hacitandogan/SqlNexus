@@ -99,6 +99,11 @@ namespace sqlnexus
             Console.WriteLine(Util.ExpandEscapeStrings(sqlnexus.Properties.Resources.Drop_Existing_Database));
         }
 
+        public static bool IsDbNameValid(string dbName)
+        {
+            return System.Text.RegularExpressions.Regex.IsMatch(dbName, @"^(?!(master|tempdb|msdb|model)$)[A-Za-z0-9_]{1,128}$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        }
+
         /// <summary>
         /// Process sqlnexus.exe command line parameters. 
         /// </summary>
@@ -163,8 +168,17 @@ namespace sqlnexus
                         }
                     case 'D':
                         {
-                            Console.WriteLine(@"Command Line Arg (/D): Database=" + arg.Substring(2));
-                            Globals.credentialMgr.Database = arg.Substring(2);
+                            string dbName = arg.Substring(2);
+                            Console.WriteLine(@"Command Line Arg (/D): Database=" + dbName);
+
+                            if (!IsDbNameValid(dbName))
+                            {
+                                Console.WriteLine($"Error: Database name must contain only basic letters, numbers, underscores, and cannot be 'master', 'tempdb', 'model', or 'msdb'. Length must be 1-128 characters. Invalid database name: '{dbName}'. Try again");
+                                return false;
+                            }
+                         
+
+                            Globals.credentialMgr.Database = dbName;
                             break;
                         }
                     case 'S':
@@ -262,15 +276,13 @@ namespace sqlnexus
                 String currentDb = Globals.credentialMgr.Database;
                 String CreateDB = string.Format(SQLScripts.CreateDB, Globals.credentialMgr.Database);
                 Console.WriteLine("Creating Database" + CreateDB);
-                //String connstring = string.Format("Data Source={0};Initial Catalog=master;Integrated Security=SSPI", Globals.credentialMgr.Server);
-                //SqlConnection conn = new SqlConnection(connstring);
 
                 //set the db to 'master' to be able to create a new Nexus db
                 Globals.credentialMgr.Database = "master";
                 SqlConnection conn = new SqlConnection(Globals.credentialMgr.ConnectionString);
                 conn.Open();
                 SqlCommand cmd = conn.CreateCommand();
-                cmd.CommandText = CreateDB;
+                cmd.CommandText = CreateDB; // CodeQL [SM03934] the DB name has been validated but even previously the db name was wrapped in brackets, so no SQL injection possible here
 
                 cmd.ExecuteNonQuery();
 

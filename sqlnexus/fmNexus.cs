@@ -804,7 +804,11 @@ namespace sqlnexus
 
         private void tvReports_AfterSelect(object sender, TreeViewEventArgs e)
         {
-            
+            if ((e == null) || (e.Node == null) || (e.Node.Text == null))
+            {
+                return;
+            }
+
             if (!CanRunReport(e.Node.Text + ".rdl"))
             {
             //    this.LogMessage("The database doesn't have necessary data to run this report", MessageOptions.All);
@@ -813,38 +817,9 @@ namespace sqlnexus
             SelectLoadReport(e.Node.Text, true, null);
         }
         private bool CanRunReport(string ReportName)
-        { 
-            String FullReportName;
-            String FullReportPath;
-            String FullXmlDoc;
-            ReportName = Path.GetFileName(ReportName);
-            if (File.Exists(Application.StartupPath + @"\Reports\" + ReportName))
-            {
-                FullReportName = Application.StartupPath + @"\Reports\" + ReportName;
-                FullReportPath = Application.StartupPath + @"\Reports\";
-
-            }
-            else if (File.Exists(Globals.AppDataPath + @"\Reports\" + ReportName))
-            {
-                FullReportPath = Globals.AppDataPath + @"\Reports\";
-                FullReportName = Globals.AppDataPath + @"\Reports\" + ReportName;
-            }
-            else
-                return true; //assuming you don't want to validate
-            FullXmlDoc = FullReportName + ".xml";
-            if (!File.Exists(FullXmlDoc))
-                return true; //assuming you don't want to validate
-            XmlDocument doc = new XmlDocument();
-            doc.Load(FullXmlDoc);
-            XmlNode node = doc.SelectSingleNode("report/validate");
-            String scriptName = node.Attributes["script"].Value.ToString();
-            StreamReader sr = File.OpenText(FullReportPath + scriptName);
-            CSql mySql = new CSql(Globals.credentialMgr.ConnectionString);
-            mySql.ExecuteSqlScript (            sr.ReadToEnd());
-            
-            return mySql.IsSuccess;
-            
-
+        {
+            //we can add some logic in the future. for now removing older and unused code
+            return true;
         }
         private void tvReports_NodeMouseClick(object sender, TreeNodeMouseClickEventArgs e)
         {
@@ -1229,7 +1204,7 @@ namespace sqlnexus
             foreach (XmlNode n in arrayXmlNodes)
             {
                 XmlNode qparamval = n.SelectSingleNode("rds:Value", nsmgr);
-                string paramname, qpname;
+                string paramname;
                 if ((null != qparamval) && (0 == qparamval.InnerText.IndexOf(PARAM_TOKEN, StringComparison.InvariantCultureIgnoreCase)))
                 {
                     string[] parts = qparamval.InnerText.Substring(PARAM_TOKEN.Length).Split('.');
@@ -1242,7 +1217,6 @@ namespace sqlnexus
                         paramname = paramname.Substring(1); // "Filter3"
                 }
 
-                qpname = n.Attributes["Name"].Value;    // e.g. "@Filter3"
 
                 // If the query parameter should take on the value of a report parameter, we need to find the 
                 // report parameter's current value.  
@@ -1299,26 +1273,7 @@ namespace sqlnexus
 
                 qrytext = qrytext.Replace("@" + paramname, paramstr);
 
-                //if (-1 != qrytext.IndexOf(qpname + ',', StringComparison.InvariantCultureIgnoreCase))
-                //{   
-                //    qrytext = qrytext.Replace(qpname + ',', paramstr);
-                //}
-                //else if (-1 != qrytext.IndexOf("@" + paramname, StringComparison.InvariantCultureIgnoreCase))
-                //{
-                //    qrytext = qrytext.Replace("@" + paramname, paramstr);
-                //}
-                //else if (-1 != qrytext.IndexOf(paramname, StringComparison.InvariantCultureIgnoreCase))
-                //{
-                //    qrytext = qrytext.Replace(paramname, paramstr);
-                //}
-                //else  //No param token in query text
-                //{
-                //    qrytext += " " + paramstr + ",";
-                //}
             }
-            ////Trim off trailing comma if there is one
-            //if (',' == qrytext[qrytext.Length - 1])
-            //    qrytext = qrytext.Substring(0, qrytext.Length - 1);
             return qrytext;
         }
 
@@ -3007,11 +2962,10 @@ namespace sqlnexus
 
             foreach (MethodInfo m in methods)
             {
-                Object obj = null;
-
                 try
                 {
-                    obj = TryMethodCall(type, m, args[2], newArgs);
+                    object obj = TryMethodCall(type, m, args[2], newArgs);
+                    obj.ToString(); //Suppress warning
                 }
                 catch (Exception e)
                 {
@@ -3250,17 +3204,17 @@ namespace sqlnexus
             }
         }
         
-        private bool CreateDB(String dbName)
+bool CreateDB(String dbName)
         {
-            
-            Regex re = new Regex(@"((;|\[|\]|\s)+)|(^master$|^tempdb$|^msdb$|^model$)+");
-            if (re.IsMatch(dbName))
+
+            // Regex pattern: database name must not be 'master', 'tempdb', 'msdb', or 'model', and must be 1-128 chars, allowed chars: A-Za-z0-9, underscore.
+            if (!Program.IsDbNameValid(dbName))
             {
-                LogMessage (String.Format("invalid database name {0} entered. try again",dbName), MessageOptions.All);
+                LogMessage($"Error: Database name must contain only basic letters, numbers, underscores and cannot be 'master', 'tempdb', 'model', or 'msdb'. Length must be 1-128 characters. Invalid database name: {dbName}. Try again", MessageOptions.All);
                 return false;
             }
             Globals.credentialMgr.Database = "master";
-            
+
             SqlConnection conn = new SqlConnection(Globals.credentialMgr.ConnectionString);
             SqlCommand cmd = conn.CreateCommand();
             bool success = true;
@@ -3283,7 +3237,6 @@ namespace sqlnexus
                 {
                     LogMessage(String.Format(Properties.Resources.Error_Nexus_CreateDBFailure, dbName, Globals.credentialMgr.Server, sqlEx.Message), MessageOptions.All, TraceEventType.Error, dlgTitle);
                 }
-
             }
             finally
             {
@@ -3308,9 +3261,8 @@ namespace sqlnexus
                 PopulateDatabaseList("tempdb");
             }
 
-            //alwasy return true because we want to use tempdb instead
-            return true; 
-
+            // always return true because we want to use tempdb instead
+            return true;
         }
 
         private void tscCurrentDatabase_TextChanged(object sender, EventArgs e)
